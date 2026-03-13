@@ -10,7 +10,7 @@ pipeline {
     stages {
         stage('1. Pull code from GitHub') {
             steps {
-                git branch: 'main', url: 'https://github.com/yourusername/blue-green-jenkins.git'
+                git branch: 'main', url: 'https://github.com/Abhinandan-58/Production-Ready-Blue-Green-Deployment-project.git'
             }
         }
         stage('2. Find Inactive Environment') {
