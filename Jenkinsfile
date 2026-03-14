@@ -4,6 +4,7 @@ pipeline {
         ALB_NAME = 'My-Blue-Green-ALB'
         BLUE_TG  = 'TG-Blue'
         GREEN_TG = 'TG-Green'
+        AWS_DEFAULT_REGION = 'us-east-1'
     }
     stages {
         stage('Pull Code from GitHub') {
@@ -27,12 +28,12 @@ pipeline {
 
                     if (currentTG.contains('blue')) {
                         env.INACTIVE_ENV = 'Green'
-                        env.ACTIVE_TG    = 'blue-tg'
-                        env.INACTIVE_TG  = 'green-tg'
+                        env.ACTIVE_TG    = 'TG-Blue'
+                        env.INACTIVE_TG  = 'TG-Green'
                     } else {
                         env.INACTIVE_ENV = 'Blue'
-                        env.ACTIVE_TG    = 'green-tg'
-                        env.INACTIVE_TG  = 'blue-tg'
+                        env.ACTIVE_TG    = 'TG-Green'
+                        env.INACTIVE_TG  = 'TG-Blue'
                     }
                     echo "Inactive environment: ${env.INACTIVE_ENV}"
                 }
@@ -49,8 +50,8 @@ pipeline {
                     """, returnStdout: true).trim()
 
                     sh """
-                        scp -o StrictHostKeyChecking=no -i /var/lib/jenkins/devops-key.pem index.html ec2-user@${publicIp}:/tmp/index.html
-                        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/devops-key.pem ec2-user@${publicIp} '
+                        scp -o StrictHostKeyChecking=no -i /var/lib/jenkins/jankey.pem index.html ec2-user@${publicIp}:/tmp/index.html
+                        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/jankey.pem ec2-user@${publicIp} '
                             sudo cp /tmp/index.html /var/www/html/index.html
                             sudo systemctl restart httpd
                         '
