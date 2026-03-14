@@ -155,5 +155,4 @@ post {
         echo "Blue-Green Deployment Successful"
     }
 }
-
 }
