@@ -1,71 +1,127 @@
 pipeline {
     agent any
     environment {
-        LISTENER_ARN = 'arn:aws:elasticloadbalancing:us-east-1:774222655403:listener/app/my-Blue-Green-ALB/952df24cae747f6c/7ce76dd9e8b3d252'  // ALB console madhun copy
-        BLUE_TG_ARN  = 'arn:aws:elasticloadbalancing:us-east-1:774222655403:targetgroup/Tg-Blue/13370a766c96fd69'
-        GREEN_TG_ARN = 'arn:aws:elasticloadbalancing:us-east-1:774222655403:targetgroup/Tg-Green/04bf97860d34905b'
-        BLUE_IP      = '172.31.27.61'
-        GREEN_IP     = '172.31.28.223'
+        ALB_NAME = 'My-Blue-Green-ALB'
+        BLUE_TG  = 'TG-Blue'
+        GREEN_TG = 'TG-Green'
     }
     stages {
-        stage('1. Pull code from GitHub') {
+        stage('Pull Code from GitHub') {
             steps {
                 git branch: 'main', url: 'https://github.com/Abhinandan-58/Production-Ready-Blue-Green-Deployment-project.git'
             }
         }
-        stage('2. Find Inactive Environment') {
+        stage('Determine Inactive Environment') {
             steps {
                 script {
-                    def currentTG = sh(script: "aws elbv2 describe-listeners --listener-arn ${LISTENER_ARN} --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn' --output text", returnStdout: true).trim()
-                    if (currentTG == BLUE_TG_ARN) {
-                        env.INACTIVE_TG = GREEN_TG_ARN
-                        env.INACTIVE_IP = GREEN_IP
-                        env.ACTIVE_TG = BLUE_TG_ARN
+                    def listenerArn = sh(script: """
+                        aws elbv2 describe-listeners \
+                        --load-balancer-arn \$(aws elbv2 describe-load-balancers --names ${ALB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text) \
+                        --query 'Listeners[0].ListenerArn' --output text
+                    """, returnStdout: true).trim()
+
+                    def currentTG = sh(script: """
+                        aws elbv2 describe-listeners --listener-arn ${listenerArn} \
+                        --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text
+                    """, returnStdout: true).trim()
+
+                    if (currentTG.contains('blue')) {
+                        env.INACTIVE_ENV = 'Green'
+                        env.ACTIVE_TG    = 'blue-tg'
+                        env.INACTIVE_TG  = 'green-tg'
                     } else {
-                        env.INACTIVE_TG = BLUE_TG_ARN
-                        env.INACTIVE_IP = BLUE_IP
-                        env.ACTIVE_TG = GREEN_TG_ARN
+                        env.INACTIVE_ENV = 'Blue'
+                        env.ACTIVE_TG    = 'green-tg'
+                        env.INACTIVE_TG  = 'blue-tg'
                     }
+                    echo "Inactive environment: ${env.INACTIVE_ENV}"
                 }
             }
         }
-        stage('3. Deploy to Inactive Environment') {
-            steps {
-                sh """
-                    scp -o StrictHostKeyChecking=no -i /var/lib/jenkins/.ssh/key.pem index.html ec2-user@${INACTIVE_IP}:/var/www/html/
-                    ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/.ssh/key.pem ec2-user@${INACTIVE_IP} 'sudo systemctl restart httpd'
-                """
-            }
-        }
-        stage('4. Health Check') {
+        stage('Deploy to Inactive Environment') {
             steps {
                 script {
-                    def health = sh(script: "aws elbv2 describe-target-health --target-group-arn ${INACTIVE_TG} --query 'TargetHealthDescriptions[0].TargetHealth.State' --output text", returnStdout: true).trim()
-                    if (health != "healthy") {
-                        error("Health check failed!")
-                    }
+                    def inactiveInstanceName = env.INACTIVE_ENV.toLowerCase()
+                    def publicIp = sh(script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Name,Values=${inactiveInstanceName}" \
+                        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+                    """, returnStdout: true).trim()
+
+                    sh """
+                        scp -o StrictHostKeyChecking=no -i /var/lib/jenkins/devops-key.pem index.html ec2-user@${publicIp}:/tmp/index.html
+                        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/devops-key.pem ec2-user@${publicIp} '
+                            sudo cp /tmp/index.html /var/www/html/index.html
+                            sudo systemctl restart httpd
+                        '
+                    """
+                    echo "Deployed to ${env.INACTIVE_ENV}"
                 }
             }
         }
-        stage('5. Switch ALB Traffic') {
+        stage('Perform Health Check') {
             steps {
-                sh """
-                    aws elbv2 modify-listener --listener-arn ${LISTENER_ARN} \
-                    --default-actions '[{"Type":"forward","ForwardConfig":{"TargetGroups":[{"TargetGroupArn":"${INACTIVE_TG}","Weight":1}]}}]'
-                """
+                script {
+                    def publicIp = sh(script: """
+                        aws ec2 describe-instances \
+                        --filters "Name=tag:Name,Values=${env.INACTIVE_ENV.toLowerCase()}" \
+                        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+                    """, returnStdout: true).trim()
+
+                    def status = sh(script: "curl -f -s http://${publicIp} > /dev/null && echo 'OK' || echo 'FAIL'", returnStdout: true).trim()
+                    if (status != 'OK') {
+                        error "Health check failed on ${env.INACTIVE_ENV}"
+                    }
+                    echo "Health check PASSED"
+                }
+            }
+        }
+        stage('Switch ALB Traffic') {
+            steps {
+                script {
+                    def newTGArn = sh(script: """
+                        aws elbv2 describe-target-groups --names ${env.INACTIVE_TG} \
+                        --query 'TargetGroups[0].TargetGroupArn' --output text
+                    """, returnStdout: true).trim()
+
+                    def listenerArn = sh(script: """
+                        aws elbv2 describe-listeners \
+                        --load-balancer-arn \$(aws elbv2 describe-load-balancers --names ${ALB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text) \
+                        --query 'Listeners[0].ListenerArn' --output text
+                    """, returnStdout: true).trim()
+
+                    sh """
+                        aws elbv2 modify-listener \
+                        --listener-arn ${listenerArn} \
+                        --default-actions Type=forward,TargetGroupArn=${newTGArn}
+                    """
+                    echo "Traffic switched to ${env.INACTIVE_ENV} ✅"
+                }
             }
         }
     }
     post {
         failure {
-            echo "Rollback triggered!"
-            sh """
-                aws elbv2 modify-listener --listener-arn ${LISTENER_ARN} \
-                --default-actions '[{"Type":"forward","ForwardConfig":{"TargetGroups":[{"TargetGroupArn":"${ACTIVE_TG}","Weight":1}]}}]'
-            """
-        }
-        success {
-            echo "Deployment successful! Traffic switched."
+            script {
+                echo "Deployment failed - Rolling back..."
+                def originalTGArn = sh(script: """
+                    aws elbv2 describe-target-groups --names ${env.ACTIVE_TG} \
+                    --query 'TargetGroups[0].TargetGroupArn' --output text
+                """, returnStdout: true).trim()
+
+                def listenerArn = sh(script: """
+                    aws elbv2 describe-listeners \
+                    --load-balancer-arn \$(aws elbv2 describe-load-balancers --names ${ALB_NAME} --query 'LoadBalancers[0].LoadBalancerArn' --output text) \
+                    --query 'Listeners[0].ListenerArn' --output text
+                """, returnStdout: true).trim()
+
+                sh """
+                    aws elbv2 modify-listener \
+                    --listener-arn ${listenerArn} \
+                    --default-actions Type=forward,TargetGroupArn=${originalTGArn}
+                """
+                echo "Rollback completed - Traffic reverted"
+            }
         }
     }
 }
