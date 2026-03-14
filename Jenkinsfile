@@ -1,7 +1,5 @@
 pipeline {
 agent any
-
-```
 environment {
     ALB_NAME = 'My-Blue-Green-ALB'
     BLUE_TG  = 'TG-Blue'
