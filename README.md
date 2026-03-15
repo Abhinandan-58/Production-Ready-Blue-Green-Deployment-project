@@ -73,23 +73,6 @@ Once the new version is verified, the load balancer switches traffic to the new 
 
 ---
 
-## 📂 Project Structure
-
-```
-blue-green-deployment/
-│
-├── Jenkinsfile
-├── app/
-│   └── index.html
-│
-├── scripts/
-│   └── deploy.sh
-│
-└── README.md
-```
-
----
-
 ## ✅ Key Features
 
 * Zero downtime deployment
