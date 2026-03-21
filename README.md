@@ -25,9 +25,9 @@ Below is the architecture diagram of the project.
 
 4. Create two Target Groups:
 
-   * TG-Blue
-   * TG-Green
-   ![](/img/img4.png)
+* TG-Blue
+* TG-Green
+  ![](/img/img4.png)
 
 5. Connect GitHub repository to Jenkins.
    ![](/img/img6.png)
